@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IAAT Chatbot - Demo</title>
+  <meta name="description"
+    content="IAAT Chatbot est un chatbot en popup léger et autonome, compatible avec toute API de type OpenAI, pour intégrer facilement une interface de conversation sur n’importe quel site web.">
+  <meta name="keywords" content="chatbot, iaat, popup, openai">
+  <meta name="author" content="Université de Strasbourg">
+  <link rel="stylesheet" href="https://unpkg.com/@iaat/chatbot@1.0.1/dist/css/chatbot.min.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #f1f1f1;
+      color: #333;
+    }
+
+    header {
+      background-color: #0073aa;
+      color: white;
+      padding: 20px 40px;
+      text-align: center;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 2em;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="content">
+    <header>
+      <h1>
+        IAAT Chatbot - Démo
+      </h1>
+    </header>
+
+    <main style="padding: 20px; max-width: 800px; margin: auto;">
+      <h2>Bienvenue sur la démo de IAAT Chatbot</h2>
+      <p>
+        Ce chatbot est intégré à cette page de démonstration pour vous montrer comment il fonctionne. Vous pouvez
+        interagir avec lui en cliquant sur l'icône de chat en bas à droite.
+      </p>
+      <p>
+        Le IAAT Chatbot est conçu pour être léger et facile à intégrer dans n'importe quel site web. Il utilise une API
+        compatible OpenAI pour générer des réponses intelligentes.
+      </p>
+      <p>
+        N'hésitez pas à poser des questions ou à demander de l'aide !
+      </p>
+    </main>
+
+  </div>
+
+  <div id="iaat-chatbot">
+    <button class="cb-chat-toggle" aria-label="Ouvrir le chat">💬</button>
+    <div class="cb-chat-popup">
+      <header class="cb-chat-header">
+        <span>🤖 Assistant</span>
+        <div class="cb-chat-header-buttons">
+          <button class="cb-clear-chat" aria-label="Effacer la conversation">⟳</button>
+          <button class="cb-close-chat" aria-label="Fermer le chat">×</button>
+        </div>
+      </header>
+      <main class="cb-chat-messages"></main>
+      <form class="cb-chat-form">
+        <textarea class="cb-chat-input" rows="1" placeholder="Pose une question..."
+          aria-label="Votre message"></textarea>
+        <button type="submit" class="cb-chat-send-button" aria-label="Envoyer le message">➤</button>
+      </form>
+    </div>
+  </div>
+  <script src="https://unpkg.com/@iaat/chatbot@1.0.1/dist/js/chatbot.min.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      window.chatbotInstance = new IaatChatbot('iaat-chatbot', {
+        proxyUrl: "https://your-litellm-instance/chat/completions?model=qwen3",
+        accessKey: "sk-S3CR3T",
+        openByDefault: "true",
+        maxConversationLength: 50,
+        welcomeMessage: "Bonjour ! Comment puis-je vous aider ?",
+      });
+    });
+  </script>
+</body>
+
+</html>

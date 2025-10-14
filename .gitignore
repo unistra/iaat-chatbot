@@ -1,0 +1,10 @@
+.env
+__pycache__
+venv/
+.vscode/
+.ansible
+dist/
+node_modules/
+docs/
+logs/
+.npmrc
