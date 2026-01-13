@@ -12,7 +12,7 @@
   --border-radius-message: 18px;
   --shadow-popup: 0 5px 15px rgba(0,0,0,0.3);
   --shadow-toggle: 0 4px 8px rgba(0,0,0,0.2);
-  --popup-width: 450px;
+  --popup-width: 768px;
 }
 
 #iaat-chatbot {
@@ -47,7 +47,7 @@
   position: fixed;
   bottom: 20px;
   right: 20px;
-  width: var(--popup-width);
+  width: clamp(300px, 90vw, var(--popup-width));
   height: 550px;
   max-height: 80vh;
   border: 1px solid var(--border-color);
