@@ -2,6 +2,18 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
 /**
+ * Configuration to override marked and open links in new windows.
+ */
+marked.use({
+  renderer: {
+    link(this: any, link: { href: string; title?: string | null; text: string }) {
+      const titleAttr = link.title ? ` title="${link.title}"` : '';
+      return `<a href="${link.href}"${titleAttr} target="_blank" rel="noopener noreferrer">${link.text}</a>`;
+    }
+  }
+});
+
+/**
  * Represents the main Chatbot application logic and UI interactions.
  */
 class IaatChatbot {
@@ -208,7 +220,9 @@ class IaatChatbot {
     let renderedContent = content;
     if (role === 'assistant') renderedContent = marked.parse(content) as string;
 
-    messageElement.innerHTML = DOMPurify.sanitize(renderedContent);
+    messageElement.innerHTML = DOMPurify.sanitize(renderedContent, {
+  ADD_ATTR: ['target', 'rel'], // authorize target and rel
+});
     messagesDiv?.appendChild(messageElement);
     if (messagesDiv) messagesDiv.scrollTop = messagesDiv.scrollHeight;
 

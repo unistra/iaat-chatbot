@@ -133,4 +133,17 @@ describe('Chatbot UI functions', () => {
   test('getConversationStorageKey should return the correct key', () => {
     expect(chatbotInstance.getConversationStorageKey()).toBe('chatbotConversation');
   });
+
+  test('assistant message links should open in new tab', () => {
+    const markdownLink = '[Click me](https://example.com)';
+    chatbotInstance.addMessage('assistant', markdownLink);
+    const message = chatMessages.lastElementChild;
+    expect(message).not.toBeNull();
+    const link = message.querySelector('a');
+    expect(link).not.toBeNull();
+    expect(link.href).toBe('https://example.com/');
+    expect(link.target).toBe('_blank');
+    expect(link.rel).toBe('noopener noreferrer');
+  });
+
 });
