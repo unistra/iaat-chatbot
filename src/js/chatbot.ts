@@ -221,8 +221,8 @@ class IaatChatbot {
     if (role === 'assistant') renderedContent = marked.parse(content) as string;
 
     messageElement.innerHTML = DOMPurify.sanitize(renderedContent, {
-  ADD_ATTR: ['target', 'rel'], // authorize target and rel
-});
+      ADD_ATTR: ['target', 'rel'], // authorize target and rel
+    });
     messagesDiv?.appendChild(messageElement);
     if (messagesDiv) {
       requestAnimationFrame(() => {
