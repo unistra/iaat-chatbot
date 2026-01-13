@@ -146,4 +146,21 @@ describe('Chatbot UI functions', () => {
     expect(link.rel).toBe('noopener noreferrer');
   });
 
+  test('should scroll to top of the newly added assistant message', () => {
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    let scrollIntoViewCalled = false;
+    HTMLElement.prototype.scrollIntoView = function() {
+      scrollIntoViewCalled = true;
+    };
+    const rafSpy = jest
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((cb) => {
+        cb();
+        return 0;
+      });
+    chatbotInstance.addMessage('assistant', 'Scroll test');
+    expect(scrollIntoViewCalled).toBe(true);
+    HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    rafSpy.mockRestore();
+  });
 });

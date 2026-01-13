@@ -224,7 +224,16 @@ class IaatChatbot {
   ADD_ATTR: ['target', 'rel'], // authorize target and rel
 });
     messagesDiv?.appendChild(messageElement);
-    if (messagesDiv) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    if (messagesDiv) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          messageElement.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start',
+          });
+        });
+      });
+    }
 
     if (save) this.saveConversation();
   }
