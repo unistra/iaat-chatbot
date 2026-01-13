@@ -1,6 +1,6 @@
 {
   "name": "@iaat/chatbot",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Chatbot application for Open WebUI",
   "main": "dist/js/chatbot.min.js",
   "files": [
