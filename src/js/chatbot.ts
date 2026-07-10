@@ -1,5 +1,6 @@
-import { marked } from 'marked';
+import { marked, parse } from 'marked';
 import DOMPurify from 'dompurify';
+import { createParser } from "eventsource-parser";
 
 /**
  * Configuration to override marked and open links in new windows.
@@ -24,6 +25,8 @@ class IaatChatbot {
    */
   conversation: Array<{ role: 'user' | 'assistant' | 'error'; content: string }>;
 
+  generationRunning: boolean;
+
   /**
    * The key used to store and retrieve the conversation from localStorage.
    * @type {string}
@@ -42,13 +45,18 @@ class IaatChatbot {
    * @param {string} [options.openByDefault] - Whether the chat should be open by default.
    * @param {number} [options.maxConversationLength] - Maximum number of messages to send to the backend.
    * @param {string} [options.welcomeMessage] - The initial welcome message.
+   * @param {boolean} [options.streaming] - Whether the answer is sent in streaming 
+   * @param {string} [options.accessKey] - The key to connect to the API
+   * @param {string} [options.model] - The generation model used by the API
    */
   options!: {
     proxyUrl?: string;
     openByDefault?: string;
     maxConversationLength?: number;
     welcomeMessage?: string;
+    streaming?: boolean;
     accessKey?: string | null;
+    model?: string | null;
   };
 
   /**
@@ -62,6 +70,8 @@ class IaatChatbot {
      * @type {Array<ChatMessage>}
      */
     this.conversation = [];
+
+    this.generationRunning = false;
 
     /**
      * The key used to store and retrieve the conversation from localStorage.
@@ -85,6 +95,8 @@ class IaatChatbot {
       maxConversationLength: 10,
       welcomeMessage: 'Welcome!',
       accessKey: null,
+      streaming: false,
+      model: null,
       ...options,
     };
 
@@ -251,6 +263,7 @@ class IaatChatbot {
     let typingIndicator = this.chatbotContainer.querySelector<HTMLDivElement>('#typing-indicator');
 
     if (show) {
+      this.generationRunning = true;
       if (!typingIndicator) {
         typingIndicator = document.createElement('div');
         typingIndicator.id = 'typing-indicator';
@@ -260,6 +273,7 @@ class IaatChatbot {
       }
     } else {
       typingIndicator?.remove();
+      this.generationRunning  = false;
     }
 
     if (messagesDiv) messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -315,31 +329,103 @@ class IaatChatbot {
 
       /** @type {{ 'Content-Type': string; [key: string]: string }} */
       const headers: { [key: string]: string } = { 'Content-Type': 'application/json' };
-      if (this.options?.accessKey) headers['Authorization'] = `Bearer ${this.options.accessKey}`;
 
-      const response = await fetch(this.options?.proxyUrl || '', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ messages: conversationToSend }),
-      });
+      const body:{ [key: string]: unknown} = { 'messages': conversationToSend, 'max_tokens':4096 };
+      if (this.options?.accessKey) {
+        headers['Authorization'] = `Bearer ${this.options.accessKey}`;
+      }
 
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const data = await response.json();
-      const reply = data.choices?.[0]?.message?.content || '(No response from API)';
+      
+         
+      if (this.options?.model) body['model'] = this.options.model;
+      if (this.options?.streaming) {
+        body['stream'] = true
+        const response = await fetch(this.options?.proxyUrl || '', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        });
+        if (!response.ok || !response.body) throw new Error(`HTTP error! status: ${response.status}`);
+          
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        
+        let answer = ""
+        const messagesDiv = this.chatbotContainer.querySelector<HTMLDivElement>('.cb-chat-messages');
+        let lastMessage = messagesDiv?.lastChild as HTMLDivElement;
+        const parser = createParser({
+          onEvent : (event) => {
 
-      this.setConversation([...this.getConversation(), { role: 'assistant', content: reply }]);
-      this.addMessage('assistant', reply);
-      this.saveConversation();
+            const data = JSON.parse(event.data);
+            if (data.delta?.text) {
+              if (this.generationRunning) {
+                this.toggleTypingIndicator(false);
+                this.addMessage('assistant', "");
+                lastMessage = messagesDiv?.lastChild as HTMLDivElement;
+              }
+              const token = data.delta.text
+              console.log(token);
+              answer += token;
+              if (lastMessage) this.addTokenToAnswer(answer, lastMessage);
+              
+            }
+          },
+        });
+        while (true) {
+          
+          const {done, value} = await reader?.read();
+          if (done) break;
+
+          parser.feed(decoder.decode(value, { stream: true }))
+          
+
+        }
+        this.setConversation([...this.getConversation(), { role: 'assistant', content: answer}]);
+        this.saveConversation();
+      } else {
+        const response = await fetch(this.options?.proxyUrl || '', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.json();
+        const reply = data.choices?.[0]?.message?.content || data.content[0].text || '(No response from API)';
+
+        this.setConversation([...this.getConversation(), { role: 'assistant', content: reply }]);
+        this.addMessage('assistant', reply);
+        this.saveConversation();
+        this.toggleTypingIndicator(false);
+      }
+
+
+
     } catch (error) {
       console.error('Error during API call:', error);
+      this.toggleTypingIndicator(false);
       this.addMessage('error', '<strong>Error:</strong> Could not contact the assistant. Please try again later.');
     } finally {
-      this.toggleTypingIndicator(false);
+      
       input.disabled = false;
       if (sendButton) sendButton.disabled = false;
       input.focus();
     }
   }
+
+  /**
+   * Update the last message to insert tokens
+   * @param {string} token - The token to add to the answer
+   * @param {HTMLDivElement} lastMessage - the message where the token is added
+   */
+  public addTokenToAnswer(content: string, lastMessage: HTMLDivElement): void {
+    let renderedContent = marked.parse(content) as string;
+    lastMessage.innerHTML = DOMPurify.sanitize(renderedContent, {
+      ADD_ATTR: ['target', 'rel'], // authorize target and rel
+    });
+  }
+
 
   /**
    * Updates the proxy URL for future API calls.
