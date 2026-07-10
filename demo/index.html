@@ -79,11 +79,13 @@
   <script>
     document.addEventListener('DOMContentLoaded', () => {
       window.chatbotInstance = new IaatChatbot('iaat-chatbot', {
-        proxyUrl: "https://your-litellm-instance/chat/completions?model=qwen3",
-        accessKey: "sk-S3CR3T",
+        proxyUrl: "http://localhost:8000/api/v1/messages",
+        accessKey: "sk-secret",
         openByDefault: "true",
         maxConversationLength: 50,
         welcomeMessage: "Bonjour ! Comment puis-je vous aider ?",
+        streaming: true,
+        model: "gemma3:4b"
       });
     });
   </script>
