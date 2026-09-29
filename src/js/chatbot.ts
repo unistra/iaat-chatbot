@@ -352,7 +352,6 @@ class IaatChatbot {
 
         this.setConversation([...this.getConversation(), { role: 'assistant', content: reply }]);
         this.addMessage('assistant', reply);
-        this.saveConversation();
       }
     } catch (error) {
       console.error('Error during API call:', error);
