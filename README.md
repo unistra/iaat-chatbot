@@ -84,12 +84,29 @@ Pour intégrer le chatbot dans une autre page HTML, suivez ces étapes :
           openByDefault: "true", // "true" pour ouvrir le chat par défaut
           maxConversationLength: 50, // Nombre max de messages à envoyer au backend
           welcomeMessage: "Bonjour ! Comment puis-je vous aider ?", // Message de bienvenue
+          stream: true, // "true" pour afficher la réponse token par token (streaming SSE)
         });
       });
     </script>
     ```
 
     *Note :* La classe `IaatChatbot` est rendue disponible globalement via `window.IaatChatbot` après l'inclusion de `chatbot.min.js`. L'utilisation de `DOMContentLoaded` assure que le DOM est entièrement chargé avant d'essayer d'instancier le chatbot.
+
+    #### Streaming de la réponse
+
+    Avec `stream: true`, le chatbot envoie `"stream": true` dans le corps de la requête et affiche la réponse de l'assistant token par token. Le backend doit alors renvoyer un flux SSE au format OpenAI :
+
+    ```text
+    data: {"choices":[{"delta":{"role":"assistant"}}]}
+
+    data: {"choices":[{"delta":{"content":"Bon"}}]}
+
+    data: {"choices":[{"delta":{"content":"jour"}}]}
+
+    data: [DONE]
+    ```
+
+    Si le backend renvoie une réponse JSON classique (sans flux), le chatbot retombe automatiquement sur l'affichage en une fois. En cas d'interruption du flux, le texte déjà reçu est conservé dans la conversation et un message d'erreur est affiché.
 
 ## Démo
 

@@ -42,6 +42,7 @@ class IaatChatbot {
    * @param {string} [options.openByDefault] - Whether the chat should be open by default.
    * @param {number} [options.maxConversationLength] - Maximum number of messages to send to the backend.
    * @param {string} [options.welcomeMessage] - The initial welcome message.
+   * @param {boolean} [options.stream] - Whether to stream the assistant reply chunk by chunk (requires an OpenAI SSE backend).
    */
   options!: {
     proxyUrl?: string;
@@ -49,6 +50,7 @@ class IaatChatbot {
     maxConversationLength?: number;
     welcomeMessage?: string;
     accessKey?: string | null;
+    stream?: boolean;
   };
 
   /**
@@ -85,6 +87,7 @@ class IaatChatbot {
       maxConversationLength: 10,
       welcomeMessage: 'Welcome!',
       accessKey: null,
+      stream: false,
       ...options,
     };
 
@@ -202,16 +205,12 @@ class IaatChatbot {
   }
 
   /**
-   * Adds a message to the chat window.
+   * Creates a message element with its content rendered.
    * @param {string} role - The role of the sender ('user', 'assistant', or 'error').
-   * @param {string} content - The HTML content of the message.
-   * @param {boolean} [save] - Whether to save the conversation to localStorage after adding the message.
-   * @returns {void}
+   * @param {string} content - The message content, can include markdown for assistant messages.
+   * @returns {HTMLElement} The created message element.
    */
-  addMessage(role: 'user' | 'assistant' | 'error', content: string, save = true): void {
-    if (!this.chatbotContainer) return;
-    /** @type {HTMLDivElement|null} */
-    const messagesDiv = this.chatbotContainer.querySelector<HTMLDivElement>('.cb-chat-messages');
+  createMessageElement(role: 'user' | 'assistant' | 'error', content: string): HTMLElement {
     const messageClass = role === 'user' ? 'cb-user-message' : (role === 'error' ? 'cb-error' : 'cb-bot-message');
 
     const messageElement = document.createElement('div');
@@ -223,6 +222,21 @@ class IaatChatbot {
     messageElement.innerHTML = DOMPurify.sanitize(renderedContent, {
       ADD_ATTR: ['target', 'rel'], // authorize target and rel
     });
+    return messageElement;
+  }
+
+  /**
+   * Adds a message to the chat window.
+   * @param {string} role - The role of the sender ('user', 'assistant', or 'error').
+   * @param {string} content - The HTML content of the message.
+   * @param {boolean} [save] - Whether to save the conversation to localStorage after adding the message.
+   * @returns {void}
+   */
+  addMessage(role: 'user' | 'assistant' | 'error', content: string, save = true): void {
+    if (!this.chatbotContainer) return;
+    /** @type {HTMLDivElement|null} */
+    const messagesDiv = this.chatbotContainer.querySelector<HTMLDivElement>('.cb-chat-messages');
+    const messageElement = this.createMessageElement(role, content);
     messagesDiv?.appendChild(messageElement);
     if (messagesDiv) {
       requestAnimationFrame(() => {
@@ -317,19 +331,29 @@ class IaatChatbot {
       const headers: { [key: string]: string } = { 'Content-Type': 'application/json' };
       if (this.options?.accessKey) headers['Authorization'] = `Bearer ${this.options.accessKey}`;
 
+      /** @type {{ messages: Array<{ role: string; content: string }>; stream?: boolean }} */
+      const requestPayload: { messages: Array<{ role: string; content: string }>; stream?: boolean } = { messages: conversationToSend };
+      if (this.options?.stream === true) requestPayload.stream = true;
+
       const response = await fetch(this.options?.proxyUrl || '', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ messages: conversationToSend }),
+        body: JSON.stringify(requestPayload),
       });
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const data = await response.json();
-      const reply = data.choices?.[0]?.message?.content || '(No response from API)';
 
-      this.setConversation([...this.getConversation(), { role: 'assistant', content: reply }]);
-      this.addMessage('assistant', reply);
-      this.saveConversation();
+      const contentType = response.headers.get('content-type') || '';
+      if (this.options?.stream === true && response.body && contentType.includes('text/event-stream')) {
+        await this.handleStreamResponse(response);
+      } else {
+        const data = await response.json();
+        const reply = data.choices?.[0]?.message?.content || '(No response from API)';
+
+        this.setConversation([...this.getConversation(), { role: 'assistant', content: reply }]);
+        this.addMessage('assistant', reply);
+        this.saveConversation();
+      }
     } catch (error) {
       console.error('Error during API call:', error);
       this.addMessage('error', '<strong>Error:</strong> Could not contact the assistant. Please try again later.');
@@ -338,6 +362,105 @@ class IaatChatbot {
       input.disabled = false;
       if (sendButton) sendButton.disabled = false;
       input.focus();
+    }
+  }
+
+  /**
+   * Reads the SSE stream from the backend response, renders the assistant
+   * message live chunk by chunk, and stores the final content in the
+   * conversation. If the stream fails midway, the partial content is kept
+   * in the conversation and the error is rethrown.
+   * @param {Response} response - The streaming fetch response.
+   * @returns {Promise<void>}
+   */
+  async handleStreamResponse(response: Response): Promise<void> {
+    const messagesDiv = this.chatbotContainer?.querySelector<HTMLDivElement>('.cb-chat-messages');
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+
+    let buffer = '';
+    let fullReply = '';
+    /** @type {HTMLElement|null} */
+    let messageElement: HTMLElement | null = null;
+    let pendingRender = false;
+
+    const renderReply = (): void => {
+      if (!fullReply || !messageElement) return;
+      messageElement.innerHTML = DOMPurify.sanitize(marked.parse(fullReply) as string, {
+        ADD_ATTR: ['target', 'rel'],
+      });
+      if (messagesDiv) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    };
+
+    const queueRender = (): void => {
+      if (pendingRender) return;
+      pendingRender = true;
+      requestAnimationFrame(() => {
+        pendingRender = false;
+        renderReply();
+      });
+    };
+
+    const ensureMessage = (): void => {
+      if (messageElement) return;
+      messageElement = this.createMessageElement('assistant', '');
+      messagesDiv?.appendChild(messageElement);
+      this.toggleTypingIndicator(false);
+    };
+
+    const consumeLine = (line: string): void => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) return;
+      const data = trimmed.slice(5).trim();
+      if (data === '[DONE]') return;
+      try {
+        /** @type {{ choices?: Array<{ delta?: { content?: string } }> }} */
+        const parsed = JSON.parse(data);
+        const delta = parsed?.choices?.[0]?.delta?.content;
+        if (typeof delta === 'string' && delta) {
+          fullReply += delta;
+          ensureMessage();
+          queueRender();
+        }
+      } catch {
+        // Ignore malformed SSE data lines.
+      }
+    };
+
+    const finalize = (complete: boolean): void => {
+      if (!fullReply && !complete) return;
+      if (!fullReply) fullReply = '(No response from API)';
+      ensureMessage();
+      renderReply();
+      this.setConversation([...this.getConversation(), { role: 'assistant', content: fullReply }]);
+      this.saveConversation();
+      if (messageElement) {
+        const element = messageElement;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            element.scrollIntoView({
+              behavior: 'smooth',
+              block: 'start',
+            });
+          });
+        });
+      }
+    };
+
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) consumeLine(line);
+      }
+      if (buffer.trim()) consumeLine(buffer);
+      finalize(true);
+    } catch (error) {
+      finalize(false);
+      throw error;
     }
   }
 
