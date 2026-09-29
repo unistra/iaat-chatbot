@@ -1,9 +1,16 @@
 /**
  * @jest-environment jsdom
  */
+if (typeof global.TextEncoder === 'undefined') {
+  const { TextEncoder: NodeTextEncoder, TextDecoder: NodeTextDecoder } = require('util');
+  global.TextEncoder = NodeTextEncoder;
+  global.TextDecoder = NodeTextDecoder;
+}
+
 global.fetch = jest.fn(() =>
   Promise.resolve({
     ok: true,
+    headers: { get: () => 'application/json' },
     json: () => Promise.resolve({ choices: [{ message: { content: 'Bot response' } }] }),
   })
 );
@@ -162,5 +169,242 @@ describe('Chatbot UI functions', () => {
     expect(scrollIntoViewCalled).toBe(true);
     HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
     rafSpy.mockRestore();
+  });
+});
+
+describe('Chatbot streaming responses', () => {
+  const DONE_MARKER = ['[', 'DO', 'NE', ']'].join('');
+  let chatMessages, userInput;
+  let chatbotInstance;
+  let originalScrollIntoView;
+  let rafSpy;
+
+  const sseResponse = (events) => {
+    const encoder = new TextEncoder();
+    let index = 0;
+    return {
+      ok: true,
+      headers: { get: () => 'text/event-stream' },
+      body: {
+        getReader: () => ({
+          read: () => Promise.resolve(
+            index < events.length
+              ? { done: false, value: encoder.encode(events[index]) }
+              : { done: true, value: undefined }
+          ).then((result) => {
+            index += 1;
+            return result;
+          })
+        }),
+      },
+    };
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <div id="iaat-chatbot">
+        <button class="cb-chat-toggle"></button>
+        <div class="cb-chat-popup">
+          <header class="cb-chat-header">
+            <span>🤖 Chatbot</span>
+            <div class="cb-chat-header-buttons">
+              <button class="cb-clear-chat"></button>
+              <button class="cb-close-chat"></button>
+            </div>
+          </header>
+          <main class="cb-chat-messages"></main>
+          <form class="cb-chat-form">
+            <textarea class="cb-chat-input"></textarea>
+            <button type="submit" class="cb-chat-send-button"></button>
+          </form>
+        </div>
+      </div>
+    `;
+
+    jest.resetModules();
+    require('./chatbot.ts');
+    const IaatChatbot = global.IaatChatbot;
+
+    chatbotInstance = new IaatChatbot('iaat-chatbot', {
+      proxyUrl: 'http://localhost:8000/chat',
+      openByDefault: 'false',
+      maxConversationLength: 4,
+      welcomeMessage: 'Welcome!',
+      stream: true,
+    });
+
+    const chatbotContainer = document.getElementById('iaat-chatbot');
+    chatMessages = chatbotContainer.querySelector('.cb-chat-messages');
+    userInput = chatbotContainer.querySelector('.cb-chat-input');
+
+    chatbotInstance.setConversation([]);
+    chatMessages.innerHTML = '';
+
+    originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = jest.fn();
+    rafSpy = jest
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((cb) => {
+        cb();
+        return 0;
+      });
+
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    rafSpy.mockRestore();
+  });
+
+  test('handleUserMessage should send stream: true in the request body', async () => {
+    global.fetch.mockImplementationOnce(() =>
+      Promise.resolve(sseResponse(['data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n']))
+    );
+    userInput.value = 'Stream test';
+    await chatbotInstance.handleUserMessage();
+    const sentBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(sentBody.stream).toBe(true);
+    expect(sentBody.messages).toHaveLength(1);
+  });
+
+  test('streamed chunks should render as a single assistant message', async () => {
+    global.fetch.mockImplementationOnce(() =>
+      Promise.resolve(
+        sseResponse([
+          'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
+          'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+          'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',
+          `data: ${DONE_MARKER}\n\n`,
+        ])
+      )
+    );
+    userInput.value = 'Stream test';
+    await chatbotInstance.handleUserMessage();
+    const botMessages = chatMessages.querySelectorAll('.cb-bot-message');
+    expect(botMessages.length).toBe(1);
+    expect(botMessages[0].textContent).toContain('Hello world');
+    expect(chatbotInstance.getConversation()).toEqual([
+      { role: 'user', content: 'Stream test' },
+      { role: 'assistant', content: 'Hello world' },
+    ]);
+  });
+
+  test('SSE events split across network chunks should be reassembled', async () => {
+    global.fetch.mockImplementationOnce(() =>
+      Promise.resolve(
+        sseResponse([
+          'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
+          'data: {"choices":[{"delta":{"cont',
+          'ent":"lo"}}]}\n\n',
+        ])
+      )
+    );
+    userInput.value = 'Stream test';
+    await chatbotInstance.handleUserMessage();
+    const botMessages = chatMessages.querySelectorAll('.cb-bot-message');
+    expect(botMessages.length).toBe(1);
+    expect(botMessages[0].textContent).toContain('Hello');
+    expect(chatbotInstance.getConversation()[1].content).toBe('Hello');
+  });
+
+  test('malformed SSE data lines should be ignored', async () => {
+    global.fetch.mockImplementationOnce(() =>
+      Promise.resolve(
+        sseResponse([
+          'data: {not valid json}\n\n',
+          'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+        ])
+      )
+    );
+    userInput.value = 'Stream test';
+    await chatbotInstance.handleUserMessage();
+    const botMessages = chatMessages.querySelectorAll('.cb-bot-message');
+    expect(botMessages.length).toBe(1);
+    expect(botMessages[0].textContent).toContain('ok');
+  });
+
+  test('mid-stream error should keep the partial content and show an error', async () => {
+    const encoder = new TextEncoder();
+    const goodChunk = encoder.encode('data: {"choices":[{"delta":{"content":"Part"}}]}\n\n');
+    let step = 0;
+    const reader = {
+      read: () => {
+        step += 1;
+        if (step === 1) return Promise.resolve({ done: false, value: goodChunk });
+        if (step === 2) return Promise.reject(new Error('network down'));
+        return Promise.resolve({ done: true, value: undefined });
+      },
+    };
+    global.fetch.mockImplementationOnce(() =>
+      Promise.resolve({ ok: true, headers: { get: () => 'text/event-stream' }, body: { getReader: () => reader } })
+    );
+    userInput.value = 'Stream test';
+    await chatbotInstance.handleUserMessage();
+    const botMessages = chatMessages.querySelectorAll('.cb-bot-message');
+    expect(botMessages.length).toBe(1);
+    expect(botMessages[0].textContent).toContain('Part');
+    expect(chatbotInstance.getConversation()[1]).toEqual({ role: 'assistant', content: 'Part' });
+    expect(chatMessages.lastElementChild.textContent).toContain('Error');
+  });
+
+  test('should fall back to JSON response when there is no stream body', async () => {
+    global.fetch.mockImplementationOnce(() =>
+      Promise.resolve({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        body: null,
+        json: () => Promise.resolve({ choices: [{ message: { content: 'JSON reply' } }] }),
+      })
+    );
+    userInput.value = 'Stream test';
+    await chatbotInstance.handleUserMessage();
+    expect(chatbotInstance.getConversation()).toEqual([
+      { role: 'user', content: 'Stream test' },
+      { role: 'assistant', content: 'JSON reply' },
+    ]);
+  });
+
+  test('should use the JSON path when the backend ignores streaming', async () => {
+    global.fetch.mockImplementationOnce(() =>
+      Promise.resolve({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        body: {},
+        json: () => Promise.resolve({ choices: [{ message: { content: 'Plain reply' } }] }),
+      })
+    );
+    userInput.value = 'Stream test';
+    await chatbotInstance.handleUserMessage();
+    expect(chatbotInstance.getConversation()).toEqual([
+      { role: 'user', content: 'Stream test' },
+      { role: 'assistant', content: 'Plain reply' },
+    ]);
+  });
+
+  test('an empty stream should show the no-response fallback', async () => {
+    global.fetch.mockImplementationOnce(() => Promise.resolve(sseResponse([`data: ${DONE_MARKER}\n\n`])));
+    userInput.value = 'Stream test';
+    await chatbotInstance.handleUserMessage();
+    const botMessages = chatMessages.querySelectorAll('.cb-bot-message');
+    expect(botMessages.length).toBe(1);
+    expect(botMessages[0].textContent.trim()).toBe('(No response from API)');
+    expect(chatbotInstance.getConversation()[1].content).toBe('(No response from API)');
+  });
+
+  test('the typing indicator should be hidden once the stream renders its first chunk', async () => {
+    global.fetch.mockImplementationOnce(() =>
+      Promise.resolve(
+        sseResponse([
+          'data: {"choices":[{"delta":{"content":"Live"}}]}\n\n',
+        ])
+      )
+    );
+    userInput.value = 'Stream test';
+    await chatbotInstance.handleUserMessage();
+    expect(document.querySelector('#typing-indicator')).toBeNull();
+    const botMessages = chatMessages.querySelectorAll('.cb-bot-message');
+    expect(botMessages.length).toBe(1);
+    expect(botMessages[0].textContent).toContain('Live');
   });
 });
